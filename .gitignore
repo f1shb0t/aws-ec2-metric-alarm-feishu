@@ -1,0 +1,26 @@
+# CDK
+*.js
+!jest.config.js
+*.d.ts
+node_modules
+cdk.out
+cdk.context.json
+
+# Keep Lambda source (Python) — don't ignore .py
+!lambda/**/*.py
+
+# Env / secrets
+.env
+.env.local
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

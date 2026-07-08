@@ -1,0 +1,27 @@
+{
+  "name": "ec2-metric-alarm-feishu",
+  "version": "1.0.0",
+  "description": "CDK v2 stack: CloudWatch alarms for tagged EC2 -> SNS -> Feishu, with a runtime Reconciler Lambda that manages alarms and IAM profile attachment.",
+  "bin": {
+    "ec2-metric-alarm-feishu": "bin/app.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk",
+    "synth": "cdk synth",
+    "deploy": "cdk deploy",
+    "destroy": "cdk destroy"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "aws-cdk": "^2.150.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0",
+    "dotenv": "^16.4.5"
+  }
+}

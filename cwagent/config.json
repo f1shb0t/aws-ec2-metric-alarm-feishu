@@ -1,0 +1,39 @@
+{
+  "agent": {
+    "metrics_collection_interval": 60,
+    "run_as_user": "cwagent"
+  },
+  "metrics": {
+    "namespace": "CWAgent",
+    "append_dimensions": {
+      "InstanceId": "${aws:InstanceId}"
+    },
+    "aggregation_dimensions": [["InstanceId"], ["InstanceId", "path"]],
+    "metrics_collected": {
+      "mem": {
+        "measurement": [
+          "mem_used_percent"
+        ],
+        "metrics_collection_interval": 60
+      },
+      "disk": {
+        "resources": ["/"],
+        "measurement": [
+          "disk_used_percent"
+        ],
+        "ignore_file_system_types": ["sysfs", "devtmpfs", "tmpfs"],
+        "metrics_collection_interval": 60
+      },
+      "ethtool": {
+        "interface_include": ["eth0"],
+        "metrics_include": [
+          "bw_in_allowance_exceeded",
+          "bw_out_allowance_exceeded",
+          "pps_allowance_exceeded",
+          "conntrack_allowance_exceeded",
+          "linklocal_allowance_exceeded"
+        ]
+      }
+    }
+  }
+}
