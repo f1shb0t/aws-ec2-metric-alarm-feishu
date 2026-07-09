@@ -421,10 +421,10 @@ def handler(event, context):
     print(f"[INFO] event: {json.dumps(event, default=str)[:2000]}")
 
     # ---- CDK Provider custom-resource onEvent ----
-    # The Provider framework strips ResponseURL and handles the CFN response
-    # itself; onEvent must RETURN a dict (and raise on failure), NOT PUT to
-    # ResponseURL. Detect it by RequestType present but no ResponseURL.
-    if isinstance(event, dict) and "RequestType" in event and "ResponseURL" not in event:
+    # The Provider framework forwards the full CFN event (including ResponseURL)
+    # but handles the CFN response ITSELF; onEvent must RETURN a dict (and raise
+    # on failure), NOT PUT to ResponseURL. Detect it by RequestType present.
+    if isinstance(event, dict) and "RequestType" in event:
         request_type = event["RequestType"]
         physical_id = event.get("PhysicalResourceId", "ec2-metric-alarm-full-reconcile")
         if request_type in ("Create", "Update"):
