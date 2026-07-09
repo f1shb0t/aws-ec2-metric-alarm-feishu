@@ -25,7 +25,7 @@
         "metrics_collection_interval": 60
       },
       "ethtool": {
-        "interface_include": ["eth0"],
+        "interface_include": ["*"],
         "metrics_include": [
           "bw_in_allowance_exceeded",
           "bw_out_allowance_exceeded",
