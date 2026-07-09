@@ -1,11 +1,29 @@
-# EC2 侧手动步骤（Debian）
+# EC2 侧手动步骤（现有 Debian，x86_64 与 arm64 通用）
 
-现有 EC2 是 Debian，**默认没有 SSM Agent，也没有 CloudWatch Agent**。本方案的 Reconciler
-Lambda 会自动给「无 instance profile」的实例挂上 `ec2-cwagent-profile`（含 SSM +
-CloudWatchAgentServerPolicy）。CPU 与 StatusCheck 告警无需 agent 即可生效；但**内存 /
-磁盘 / 网络 ethtool** 指标需要在实例内安装并运行 CloudWatch Agent。
+本文面向**已经存在**的 Debian 实例（**不依赖 user-data**，逐台手动装即可），同时覆盖
+**x86_64（amd64）与 arm64（Graviton）两种架构**。现有 Debian **默认没有 SSM Agent，也没有
+CloudWatch Agent**。本方案的 Reconciler Lambda 会自动给「无 instance profile」的实例挂上
+`ec2-cwagent-profile`（含 SSM + CloudWatchAgentServerPolicy）。CPU 与 StatusCheck 告警无需
+agent 即可生效；但**内存 / 磁盘 / 网络 ethtool** 指标需要在实例内安装并运行 CloudWatch Agent。
 
 > 下面命令中的 `<region>` 请替换成实例所在区域，例如 `ap-northeast-1`。
+
+## 0. 先确认架构（amd64 vs arm64）
+
+下面每一步的下载 URL 都因架构而异，先查清楚：
+
+```bash
+dpkg --print-architecture
+#  amd64  -> x86_64（Intel/AMD）
+#  arm64  -> Graviton（arm64）
+```
+
+后续步骤把这个值填进对应的 `<arch>` 位置即可。也可以直接把它存成变量，命令原样复制：
+
+```bash
+ARCH=$(dpkg --print-architecture)   # amd64 或 arm64
+echo "$ARCH"
+```
 
 ## 1. 确认 IAM Role 已挂
 
@@ -23,26 +41,54 @@ aws ec2 describe-iam-instance-profile-associations \
   --filters Name=instance-id,Values=<instance-id> --region <region>
 ```
 
-> 挂/换 instance profile 后，实例内可能需要 ~1-2 分钟凭证才生效。
+> **重要（踩过的坑）**：给**正在运行**的实例新挂 IAM role 后，实例内已经跑着的 agent
+> 不会立刻拿到新凭证。挂/换 profile 后请**重启相关 agent，或直接 reboot 一次**——我们当时
+> 就是 reboot 之后 SSM 才注册成功。至少执行：
+>
+> ```bash
+> sudo systemctl restart amazon-ssm-agent
+> sudo systemctl restart amazon-cloudwatch-agent   # 如已装
+> # 若仍不生效：sudo reboot
+> ```
 
-## 2. 安装 SSM Agent（Debian amd64）
+## 2. 安装 SSM Agent（按架构选下载路径）
+
+SSM Agent 的 .deb 下载路径按架构区分：**amd64 用 `debian_amd64`，arm64 用 `debian_arm64`**。
 
 ```bash
-wget https://s3.<region>.amazonaws.com/amazon-ssm-<region>/latest/debian_amd64/amazon-ssm-agent.deb
+ARCH=$(dpkg --print-architecture)   # amd64 或 arm64
+
+wget https://s3.<region>.amazonaws.com/amazon-ssm-<region>/latest/debian_${ARCH}/amazon-ssm-agent.deb
 sudo dpkg -i amazon-ssm-agent.deb
 sudo systemctl enable amazon-ssm-agent
 sudo systemctl start amazon-ssm-agent
 sudo systemctl status amazon-ssm-agent --no-pager
 ```
 
-装好后到 SSM 控制台 → Fleet Manager 应能看到该实例为 Managed。
+显式写法（不用变量）：
 
-## 3. 安装 CloudWatch Agent（Debian amd64）
+- **amd64**：`.../latest/debian_amd64/amazon-ssm-agent.deb`
+- **arm64**：`.../latest/debian_arm64/amazon-ssm-agent.deb`
+
+装好、且 IAM role 已挂并重启 agent 后，到 SSM 控制台 → Fleet Manager 应能看到该实例为
+Managed。若迟迟不出现，回到第 1 步 reboot 一次。
+
+## 3. 安装 CloudWatch Agent（按架构选下载路径）
+
+CloudWatch Agent 的 .deb 也按架构区分：**amd64 用 `debian/amd64/latest`，arm64 用
+`debian/arm64/latest`**。
 
 ```bash
-wget https://amazoncloudwatch-agent.s3.amazonaws.com/debian/amd64/latest/amazon-cloudwatch-agent.deb
+ARCH=$(dpkg --print-architecture)   # amd64 或 arm64
+
+wget https://amazoncloudwatch-agent.s3.amazonaws.com/debian/${ARCH}/latest/amazon-cloudwatch-agent.deb
 sudo dpkg -i -E ./amazon-cloudwatch-agent.deb
 ```
+
+显式写法（不用变量）：
+
+- **amd64**：`https://amazoncloudwatch-agent.s3.amazonaws.com/debian/amd64/latest/amazon-cloudwatch-agent.deb`
+- **arm64**：`https://amazoncloudwatch-agent.s3.amazonaws.com/debian/arm64/latest/amazon-cloudwatch-agent.deb`
 
 > ethtool 插件需要较新版的 CloudWatch Agent（建议用上面的 `latest` 包）。
 
@@ -60,7 +106,14 @@ sudo cp config.json /opt/aws/amazon-cloudwatch-agent/etc/config.json
 - `disk_used_percent`（根分区 `/`）
 - ethtool allowance-exceeded 计数器（`bw_in / bw_out / pps / conntrack / linklocal`）
 - `namespace = CWAgent`，`append_dimensions.InstanceId = ${aws:InstanceId}`
-- **`run_as_user = cwagent`**
+- **`run_as_user = cwagent`**（用 `cwagent` 用户跑，不要 root，见文末「重要经验」）
+
+> **⚠️ 关键坑（我们踩过）：ethtool 的 `interface_include` 必须是 `["*"]`，不能写死
+> `["eth0"]`。** Debian（以及使用可预测网卡命名的现代内核）上，主网卡叫 **`ens5`** 而不是
+> `eth0`（arm64/Graviton 同样可能是 `ens5`/`enp*`）。若配置里写 `["eth0"]`，ethtool 插件
+> 找不到接口，`ethtool_*_allowance_exceeded` 指标**根本不会上报**，对应告警永远停在
+> INSUFFICIENT_DATA。仓库里的 `cwagent/config.json` 已改为 `["*"]`，匹配所有接口，跨发行版/
+> 架构都稳妥。用 `ip -br link` 可查本机网卡名确认。
 
 ### 维度对齐（关键：告警只按聚合后的维度匹配）
 

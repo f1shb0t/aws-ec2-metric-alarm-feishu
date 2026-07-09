@@ -61,6 +61,15 @@ export class Ec2MetricAlarmStack extends Stack {
     });
     topic.addSubscription(new LambdaSubscription(feishuFn));
 
+    // The forwarder enriches cards with the EC2 Name tag (SNS alarm payloads only
+    // carry the InstanceId dimension), so it needs to describe instances.
+    feishuFn.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ['ec2:DescribeInstances'],
+        resources: ['*'], // DescribeInstances does not support resource-level scoping
+      })
+    );
+
     // ---------------------------------------------------------------------
     // 3. IAM Instance Profile for CloudWatch Agent (SSM + CWAgent).
     // ---------------------------------------------------------------------

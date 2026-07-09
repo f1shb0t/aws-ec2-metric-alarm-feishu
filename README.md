@@ -86,7 +86,22 @@ npx cdk deploy --require-approval never
 
 ### 4. EC2 侧安装 SSM + CloudWatch Agent
 
-内存/磁盘/网络指标需要在实例内装 agent，见 **[docs/EC2-SETUP-DEBIAN.md](docs/EC2-SETUP-DEBIAN.md)**。
+内存/磁盘/网络指标需要在实例内装 agent，见 **[docs/EC2-SETUP-DEBIAN.md](docs/EC2-SETUP-DEBIAN.md)**
+（覆盖现有 Debian 的 x86_64 与 arm64 两种架构）。
+
+### 5. 私有子网 / 无 NAT？先建 VPC 接口端点
+
+若实例在**私有子网且没有 NAT 网关**，agent 无法直接访问 AWS API，需为 SSM 与 CloudWatch
+创建一组 **VPC 接口端点（PrivateLink）**，否则 SSM 不 Managed、CWAgent 指标上报失败、告警一直
+INSUFFICIENT_DATA。有 NAT 或在公有子网则无需操作。所需端点与配置见
+**[docs/PRIVATE-SUBNET-VPC-ENDPOINTS.md](docs/PRIVATE-SUBNET-VPC-ENDPOINTS.md)**：
+
+- `com.amazonaws.<region>.ssm` / `ssmmessages` / `ec2messages`（SSM Agent）
+- `com.amazonaws.<region>.monitoring`（CloudWatch 指标 `PutMetricData`）
+- `com.amazonaws.<region>.logs`（可选，仅推日志时）
+
+> 每个端点启用 Private DNS、挂放行 443 的安全组、关联私有子网即可。本方案**默认不用 CDK
+> 创建**这些端点（有成本），按需手动补。
 
 ## 可配置参数（CDK context）
 
@@ -171,7 +186,8 @@ aws lambda invoke --function-name <ReconcilerFunctionName> \
 ├── cwagent/config.json              # CloudWatch Agent 配置
 ├── docs/
 │   ├── SPEC.md                      # 需求规格
-│   └── EC2-SETUP-DEBIAN.md          # EC2 侧安装步骤
+│   ├── EC2-SETUP-DEBIAN.md          # EC2 侧安装步骤（amd64 + arm64）
+│   └── PRIVATE-SUBNET-VPC-ENDPOINTS.md  # 私有子网无 NAT 时的 VPC 端点
 ├── .env.example
 ├── cdk.json  tsconfig.json  package.json
 ```
