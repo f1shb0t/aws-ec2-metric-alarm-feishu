@@ -128,9 +128,13 @@ aws ec2 create-tags --resources i-xxxx i-yyyy \
 内存/磁盘/网络指标需要在实例内装 agent，见 **[docs/EC2-SETUP-DEBIAN.md](docs/EC2-SETUP-DEBIAN.md)**
 （覆盖现有 Debian 的 x86_64 与 arm64 两种架构）。
 
-> **批量场景**：实例已是 SSM Managed 时，用一键脚本 **[`scripts/deploy-cwagent.sh`](scripts/deploy-cwagent.sh)**
-> 可对所有带监控 tag 的实例一次性装好并配置 CW Agent（无需逐台 SSH）：
-> `REGION=<region> ./scripts/deploy-cwagent.sh`（先 `--dry-run` 看命中哪些实例）。
+> **批量场景**：
+> - 存量实例默认没有 SSM Agent（鸡生蛋），先用 **[`scripts/bootstrap-ssm.sh`](scripts/bootstrap-ssm.sh)**
+>   破冰——只用 ssh 并发装 SSM Agent，无需 ansible/跳板：`REGION=<region> ./scripts/bootstrap-ssm.sh hosts.txt`。
+>   新实例则在 user-data 里装 SSM（见文档 §1.5）。
+> - 实例已是 SSM Managed 后，用 **[`scripts/deploy-cwagent.sh`](scripts/deploy-cwagent.sh)**
+>   对所有带监控 tag 的实例一次性装好并配置 CW Agent（无需逐台 SSH）：
+>   `REGION=<region> ./scripts/deploy-cwagent.sh`（先 `--dry-run` 看命中哪些实例）。
 
 ### 5. 私有子网 / 无 NAT？先建 VPC 接口端点
 
@@ -231,7 +235,8 @@ aws lambda invoke --function-name <ReconcilerFunctionName> \
 │   └── reconciler/handler.py        # 运行时告警/profile 管理
 ├── cwagent/config.json              # CloudWatch Agent 配置
 ├── scripts/
-│   └── deploy-cwagent.sh            # 一键：批量给带 tag 的实例装/配 CW Agent（走 SSM）
+│   ├── bootstrap-ssm.sh            # 存量实例破冰：SSH 并发装 SSM Agent（无需 ansible/跳板）
+│   └── deploy-cwagent.sh           # 一键：批量给带 tag 的实例装/配 CW Agent（走 SSM）
 ├── docs/
 │   ├── SPEC.md                      # 需求规格
 │   ├── EC2-SETUP-DEBIAN.md          # EC2 侧安装步骤（amd64 + arm64）

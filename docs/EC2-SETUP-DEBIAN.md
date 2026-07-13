@@ -51,7 +51,68 @@ aws ec2 describe-iam-instance-profile-associations \
 > # 若仍不生效：sudo reboot
 > ```
 
+## 1.5 让实例先具备 SSM（破冰）——鸡生蛋问题的解法
+
+Debian 默认**没有 SSM Agent**，而后面的 SSM 批量下发（第 7 步的 `deploy-cwagent.sh`）又依赖
+SSM Agent。所以每台实例都需要**先破冰一次**装上 SSM Agent。破冰之后所有运维（CW Agent、
+配置更新、补丁）全走 SSM，**永久免 SSH**。按场景选：
+
+### 场景 A：新建实例 → user-data 一劳永逸（推荐）
+
+新起的 Debian 在 **user-data** 里装 SSM Agent，开机自动完成，永不用 SSH：
+
+```bash
+#!/bin/bash
+ARCH=$(dpkg --print-architecture)   # amd64 / arm64
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60")
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
+cd /tmp
+wget -q "https://s3.${REGION}.amazonaws.com/amazon-ssm-${REGION}/latest/debian_${ARCH}/amazon-ssm-agent.deb" -O ssm.deb
+dpkg -i ssm.deb
+systemctl enable --now amazon-ssm-agent
+```
+
+配合启动模板/ASG 里挂好 `ec2-cwagent-profile`（或含 `AmazonSSMManagedInstanceCore` 的 role），
+新实例开机即 Managed。
+
+### 场景 B：存量实例（已在跑、无 SSM）→ 破冰脚本并发装
+
+存量实例绕不开**一次**远程执行。仓库提供 **[`scripts/bootstrap-ssm.sh`](../scripts/bootstrap-ssm.sh)**，
+只用系统自带的 `ssh` + `xargs` 并发（**不依赖 ansible/pssh/跳板**），读一个 hosts 列表，一次性
+给一批实例装好并启动 SSM Agent：
+
+```bash
+# hosts.txt：一行一个目标，支持 user@host，# 注释
+#   admin@203.0.113.10
+#   ubuntu@203.0.113.11
+#   admin@10.0.1.5
+
+REGION=ap-northeast-1 ./scripts/bootstrap-ssm.sh hosts.txt
+# 先看命中哪些、不实际执行：
+./scripts/bootstrap-ssm.sh hosts.txt --dry-run
+# 自定义 key / 默认用户 / 并发：
+SSH_KEY=~/.ssh/my.pem SSH_USER=admin PARALLEL=20 ./scripts/bootstrap-ssm.sh hosts.txt
+```
+
+脚本对每台实例：识别架构 → 从其所在 region 下载对应 .deb → 装并 `enable --now`（已在跑的跳过）。
+**前置**：本机能 SSH 到目标（key + 安全组放行 22）、目标已挂含 `AmazonSSMManagedInstanceCore`
+的 role、能访问 SSM 的 S3 下载源（公有子网/NAT 或已配 VPC 端点）。
+
+破冰完成后，用下面「验证哪些已 Managed」确认，再进入第 7 步批量装 CloudWatch Agent。
+
+```bash
+aws ssm describe-instance-information --region <region> \
+  --query 'InstanceInformationList[].{Id:InstanceId,Ping:PingStatus}' --output table
+```
+
+> **顺序建议**：先 `bootstrap-ssm.sh`（破冰装 SSM）→ 确认 Managed → 再 `deploy-cwagent.sh`
+> （批量装/配 CW Agent）。前者一次性，后者可反复用于配置更新。
+
+---
+
 ## 2. 安装 SSM Agent（按架构选下载路径）
+
+> 若已用上面 **1.5 的破冰脚本或 user-data** 装好 SSM，本节可跳过；以下是**单台手动**装法。
 
 SSM Agent 的 .deb 下载路径按架构区分：**amd64 用 `debian_amd64`，arm64 用 `debian_arm64`**。
 
