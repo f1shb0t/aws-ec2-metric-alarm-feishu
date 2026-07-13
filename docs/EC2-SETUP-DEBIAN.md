@@ -157,29 +157,57 @@ aws cloudwatch list-metrics --namespace CWAgent \
 上报后，Reconciler 创建的 `ec2mon-<instanceId>-mem/disk/...` 告警会从 INSUFFICIENT_DATA
 转为 OK。
 
-## 7. （可选）用 SSM 批量下发，避免逐台登录
+## 7. （推荐）用一键脚本批量下发，避免逐台登录
 
-一旦 SSM Agent 就绪，可用 **SSM Run Command / State Manager** 批量安装与配置，思路：
+仓库提供 **[`scripts/deploy-cwagent.sh`](../scripts/deploy-cwagent.sh)**，一条命令即可在**所有
+带监控 tag 的实例**上完成：① 把 `cwagent/config.json` 存进 SSM Parameter Store → ② 批量安装
+CloudWatch Agent → ③ 下发配置并启动。全程走 SSM，**无需 SSH 登录任何实例**。
 
-1. 先手动或用 user-data 装好 SSM Agent（或用支持 SSM 的 AMI）。
-2. 用托管文档 `AWS-ConfigureAWSPackage` 安装 `AmazonCloudWatchAgent`：
+```bash
+# 默认 region + tag Monitor=true
+./scripts/deploy-cwagent.sh
+
+# 指定 region
+REGION=ap-northeast-1 ./scripts/deploy-cwagent.sh
+
+# 自定义监控 tag
+TAG_KEY=Env TAG_VALUE=prod ./scripts/deploy-cwagent.sh
+
+# 只打印将执行的命令、不实际下发（先看看命中哪些实例）
+./scripts/deploy-cwagent.sh --dry-run
+```
+
+脚本会先列出「匹配到的 running 实例」与「已是 SSM Managed 的实例」供你核对，再下发命令，最后
+打印查看执行结果 / 验证指标上报的命令。
+
+> **前置条件**：目标实例必须已是 **SSM Managed**（SSM Agent 运行中 + 挂了含
+> `AmazonSSMManagedInstanceCore` 的 role）。本方案的 Reconciler 会自动给「无 profile」实例挂
+> `ec2-cwagent-profile`；已装 SSM 的实例挂/换 role 后 **reboot 一次**即可注册（见第 1 步的坑）。
+> 用 `aws ssm describe-instance-information --region <region>` 可确认哪些已 Managed；**未 Managed
+> 的实例会被 SSM 跳过**。
+
+### 手动等价命令（脚本背后做的事，供排障参考）
+
+1. 把配置存进 Parameter Store：
    ```bash
-   aws ssm send-command \
-     --document-name "AWS-ConfigureAWSPackage" \
+   aws ssm put-parameter --name /cwagent/config --type String --overwrite \
+     --value file://cwagent/config.json --region <region>
+   ```
+2. 用托管文档 `AWS-ConfigureAWSPackage` 安装 agent：
+   ```bash
+   aws ssm send-command --document-name "AWS-ConfigureAWSPackage" \
      --targets Key=tag:Monitor,Values=true \
      --parameters '{"action":["Install"],"name":["AmazonCloudWatchAgent"]}' \
      --region <region>
    ```
-3. 把 `cwagent/config.json` 存进 SSM Parameter Store（如 `/cwagent/config`），再用托管文档
-   `AmazonCloudWatch-ManageAgent` 下发并启动：
+3. 用托管文档 `AmazonCloudWatch-ManageAgent` 下发配置并启动：
    ```bash
-   aws ssm send-command \
-     --document-name "AmazonCloudWatch-ManageAgent" \
+   aws ssm send-command --document-name "AmazonCloudWatch-ManageAgent" \
      --targets Key=tag:Monitor,Values=true \
      --parameters '{"action":["configure"],"mode":["ec2"],"optionalConfigurationSource":["ssm"],"optionalConfigurationLocation":["/cwagent/config"],"optionalRestart":["yes"]}' \
      --region <region>
    ```
-4. 用 **State Manager** 把上述关联设为定期执行，保证新实例自动合规。
+4. 想让**新实例自动合规**：用 **State Manager** 把上述关联设为定期执行即可。
 
 ## 重要经验
 

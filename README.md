@@ -128,6 +128,10 @@ aws ec2 create-tags --resources i-xxxx i-yyyy \
 内存/磁盘/网络指标需要在实例内装 agent，见 **[docs/EC2-SETUP-DEBIAN.md](docs/EC2-SETUP-DEBIAN.md)**
 （覆盖现有 Debian 的 x86_64 与 arm64 两种架构）。
 
+> **批量场景**：实例已是 SSM Managed 时，用一键脚本 **[`scripts/deploy-cwagent.sh`](scripts/deploy-cwagent.sh)**
+> 可对所有带监控 tag 的实例一次性装好并配置 CW Agent（无需逐台 SSH）：
+> `REGION=<region> ./scripts/deploy-cwagent.sh`（先 `--dry-run` 看命中哪些实例）。
+
 ### 5. 私有子网 / 无 NAT？先建 VPC 接口端点
 
 若实例在**私有子网且没有 NAT 网关**，agent 无法直接访问 AWS API，需为 SSM 与 CloudWatch
@@ -226,6 +230,8 @@ aws lambda invoke --function-name <ReconcilerFunctionName> \
 │   ├── feishu_forwarder/handler.py  # SNS -> 飞书卡片（含 InstanceId 反查 Name tag）
 │   └── reconciler/handler.py        # 运行时告警/profile 管理
 ├── cwagent/config.json              # CloudWatch Agent 配置
+├── scripts/
+│   └── deploy-cwagent.sh            # 一键：批量给带 tag 的实例装/配 CW Agent（走 SSM）
 ├── docs/
 │   ├── SPEC.md                      # 需求规格
 │   ├── EC2-SETUP-DEBIAN.md          # EC2 侧安装步骤（amd64 + arm64）
