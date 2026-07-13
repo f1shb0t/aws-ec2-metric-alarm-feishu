@@ -26,6 +26,7 @@
                           │        │                                     │   │ AlarmActions/OKActions
                           │        ▼                                     │◀──┘
                           │   Feishu Forwarder Lambda ──▶ 飞书群机器人    │
+                          │     (用 InstanceId 反查 Name tag，卡片带名)   │
                           └─────────────────────────────────────────────┘
   * 仅对「无 profile」的实例自动挂载；已有 profile 默认跳过（除非 forceAttachProfile）。
 ```
@@ -80,9 +81,47 @@ npx cdk deploy --require-approval never
 
 > 需要 Docker 运行（CDK 打包 Python Lambda）。
 
+#### 指定部署 region
+
+Stack 的 region 由 `bin/app.ts` 里的 `CDK_DEFAULT_REGION` 决定，而该变量由 **CDK CLI 自动**
+从标准 AWS 解析链推导（无需手动 export）。指定方式，按需任选：
+
+```bash
+# 方式 1：临时指定 region（一次性）
+AWS_REGION=ap-northeast-1 npx cdk deploy
+
+# 方式 2：用 profile（region 绑在 ~/.aws/config 里该 profile 的 region=）
+npx cdk deploy --profile my-tokyo-profile
+
+# 方式 3：不指定 → 走当前 shell 的默认解析链
+#   AWS_REGION > AWS_DEFAULT_REGION > ~/.aws/config 默认 profile 的 region
+```
+
+> 本方案为**单 region 部署**：SNS / Lambda / EventBridge 均为 region 级资源，每个 region 需
+> 各自 `cdk bootstrap` + `cdk deploy` 一份。**注意**：IAM Role/Instance Profile 名字当前写死
+> （`ec2-cwagent-role` / `ec2-cwagent-profile`），同账号下多 region 部署会因同名 IAM 实体冲突，
+> 本版仅支持单 region。
+
 部署完成后：
 - 存量带 tag 的 EC2 会由 Custom Resource 触发的全量 reconcile 自动创建 `ec2mon-*` 告警；
 - 之后新开/打 tag/删除的实例由 EventBridge 事件驱动增量处理。
+
+#### Day-2：给「已存在」的 EC2 加监控
+
+先建 EC2、后部署 stack（或 stack 已在跑、后来才想纳管旧实例）都不用手动建告警，只需**打监控 tag**：
+
+```bash
+# 给存量实例打上监控 tag（默认 Monitor=true）
+aws ec2 create-tags --resources i-xxxx i-yyyy \
+  --tags Key=Monitor,Value=true --region <region>
+```
+
+- **stack 尚未部署**：打好 tag 后 `cdk deploy`，部署时的全量 reconcile 自动为其建告警。
+- **stack 已部署**：打 tag 后由 `Ec2TagChangeRule` **自动**捕获，数分钟内建告警，无需重新部署。
+- 也可手动触发一次全量 reconcile（见下方「测试」节）立即纳管。
+
+> ⚠️ 全量 reconcile 只扫 **running / pending** 状态的实例；**stopped** 实例暂不建告警，
+> 待其 start 时由 `Ec2StateChangeRule` 自动补上（避免给关机实例建无用告警）。
 
 ### 4. EC2 侧安装 SSM + CloudWatch Agent
 
@@ -167,6 +206,9 @@ aws lambda invoke --function-name <ReconcilerFunctionName> \
   CloudWatchAgentServerPolicy。
 - **namespace 必须一致**：agent 配置和告警都用 `CWAgent`，改了一个要一起改（`-c cwagentNamespace=`）。
 - **飞书签名**：机器人开了「签名校验」就必须配 `FEISHU_WEBHOOK_SECRET`，否则消息被拒。
+- **告警卡片带实例 Name**：SNS 消息本身不含 EC2 Name，Forwarder 收到后用 `InstanceId` 反查
+  Name tag（卡片「实例」行显示 `名称 (i-xxxx)`）。已给 Forwarder Lambda 加 `ec2:DescribeInstances`
+  权限；查不到 Name 或无 InstanceId 维度时优雅 fallback 到纯 id / 空串，不会报错。
 - **磁盘维度**：磁盘告警带 `path=/` 维度，agent 的 `disk.resources` 要含 `/`；`device`/`fstype`
   由 `aggregation_dimensions: ["InstanceId","path"]` 汇掉，告警只需 `InstanceId + path=/` 就能命中。
 - **ethtool 维度**：ethtool 原始带 `interface=eth0` 维度，靠 `aggregation_dimensions: ["InstanceId"]`
@@ -181,7 +223,7 @@ aws lambda invoke --function-name <ReconcilerFunctionName> \
 ├── bin/app.ts                       # CDK 入口（读 context + .env）
 ├── lib/ec2-metric-alarm-stack.ts    # 唯一 Stack
 ├── lambda/
-│   ├── feishu_forwarder/handler.py  # SNS -> 飞书卡片（已有）
+│   ├── feishu_forwarder/handler.py  # SNS -> 飞书卡片（含 InstanceId 反查 Name tag）
 │   └── reconciler/handler.py        # 运行时告警/profile 管理
 ├── cwagent/config.json              # CloudWatch Agent 配置
 ├── docs/
